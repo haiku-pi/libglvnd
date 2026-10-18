@@ -24,6 +24,12 @@
 
 dep_be = cc.find_library('be')
 
+# Haiku's private "shared" kit headers (AutoDeleter.h, ...); below the sysroot
+# when cross-compiling.
+inc_haiku_private_shared = include_directories(
+  meson.get_external_property('sys_root', '') +
+  '/boot/system/develop/headers/private/shared')
+
 libGL = shared_library(
   'GL',
   [
@@ -33,7 +39,7 @@ libGL = shared_library(
   include_directories : [
     inc_include,
     inc_include_hgl,
-    '/boot/system/develop/headers/private/shared'
+    inc_haiku_private_shared,
   ],
   link_args : '-Wl,-Bsymbolic',
   dependencies : [

@@ -33,6 +33,12 @@
 
 #include "BitmapHook.h"
 
+// Haiku's <pthread.h> spells it with the _NP suffix.
+#if !defined(PTHREAD_RECURSIVE_MUTEX_INITIALIZER) \
+	&& defined(PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP)
+#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP
+#endif
+
 
 struct glview_direct_info {
     direct_buffer_info* direct_info;
