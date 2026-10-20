@@ -235,14 +235,32 @@ status_t BGLView::Renderer::Init()
         shareCtx = display->eglGetCurrentContext();
     }
 
-    EGLBoolean result = display->eglBindAPI(EGL_OPENGL_API);
+    const bool es = (view->fOptions & BGL_CONTEXT_ES) != 0;
+    EGLBoolean result = display->eglBindAPI(es ? EGL_OPENGL_ES_API : EGL_OPENGL_API);
     if (result != EGL_TRUE) {
         fprintf(stderr, "[!] eglBindAPI failed\n");
         return B_ERROR;
     }
 
-    eglCtx = display->eglCreateContext(display->eglDpy, display->eglCfg, shareCtx, NULL);
-    if (eglCtx == NULL) {
+    if (es) {
+        // the newest OpenGL ES version the driver offers
+        static const EGLint kVersions[][2] = { { 3, 1 }, { 3, 0 }, { 2, 0 } };
+        eglCtx = EGL_NO_CONTEXT;
+        for (size_t i = 0; i < sizeof(kVersions) / sizeof(kVersions[0])
+                && eglCtx == EGL_NO_CONTEXT; i++) {
+            const EGLint attribs[] = {
+                EGL_CONTEXT_MAJOR_VERSION, kVersions[i][0],
+                EGL_CONTEXT_MINOR_VERSION, kVersions[i][1],
+                EGL_NONE
+            };
+            eglCtx = display->eglCreateContext(display->eglDpy, display->eglCfg,
+                shareCtx, attribs);
+        }
+    } else {
+        eglCtx = display->eglCreateContext(display->eglDpy, display->eglCfg, shareCtx,
+            NULL);
+    }
+    if (eglCtx == EGL_NO_CONTEXT) {
         fprintf(stderr, "[!] eglCreateContext failed\n");
         return B_ERROR;
     }

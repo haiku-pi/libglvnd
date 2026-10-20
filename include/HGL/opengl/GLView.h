@@ -25,6 +25,9 @@
 #define BGL_UNDERLAY		128
 #define BGL_STENCIL			512
 #define BGL_SHARE_CONTEXT	1024
+#define BGL_CONTEXT_ES		2048
+	// an OpenGL ES context (3.1, 3.0 or 2.0: the newest the driver has) instead
+	// of desktop OpenGL
 
 
 #ifdef __cplusplus
