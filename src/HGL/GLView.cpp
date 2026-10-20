@@ -89,7 +89,7 @@ protected:
 
 public:
     Display();
-    virtual ~Display() = default;
+    virtual ~Display();
 
     status_t InitCheck();
 };
@@ -128,6 +128,16 @@ BGLView::Display BGLView::sDisplay;
 
 BGLView::Display::Display()
 {
+    fReferenceCount = 0;
+}
+
+BGLView::Display::~Display()
+{
+    // A program may exit with GL views it never deleted: their renderers still
+    // reference the display when the static is destroyed. The process is going
+    // away, so is everything EGL holds; without this, BReferenceable's
+    // destructor stops the program in the debugger ("deleting referenceable
+    // object ... with reference count").
     fReferenceCount = 0;
 }
 
