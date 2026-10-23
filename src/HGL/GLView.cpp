@@ -227,10 +227,18 @@ void BGLView::Renderer::BitmapHook::GetSize(uint32_t &width, uint32_t &height)
 
 BBitmap *BGLView::Renderer::BitmapHook::SetBitmap(BBitmap *bmp)
 {
-    PthreadMutexLocker lock(&Base()->fLock);
-    BBitmap* oldBmp = Base()->fBitmap.Detach();
-    Base()->fBitmap.SetTo(bmp);
-    BMessenger(Base()->view).SendMessage(B_INVALIDATE);
+    BBitmap* oldBmp;
+    {
+        PthreadMutexLocker lock(&Base()->fLock);
+        oldBmp = Base()->fBitmap.Detach();
+        Base()->fBitmap.SetTo(bmp);
+    }
+    // Outside the lock, and without waiting: the presenter thread calls this for every frame. While the
+    // window's thread is held up (its looper locked by the thread tearing it down) its port fills with
+    // these, and a send waiting for room - holding the lock Draw() needs - deadlocked the program's exit.
+    // A full port already holds an update for the view.
+    BMessage invalidate(B_INVALIDATE);
+    BMessenger(Base()->view).SendMessage(&invalidate, (BHandler*)NULL, 0);
     return oldBmp;
 }
 
