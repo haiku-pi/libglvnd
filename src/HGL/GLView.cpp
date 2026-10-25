@@ -335,6 +335,9 @@ BGLView::BGLView(BRect rect, const char* name, ulong resizingMode, ulong mode,
     fClipInfo(NULL),
     fRenderer(new Renderer{.view = this})
 {
+    // The frames cover the view (Draw() fills what they do not): app_server
+    // need not fill the background before each one.
+    SetViewColor(B_TRANSPARENT_COLOR);
     if (fRenderer->Init() < B_OK) {
         delete fRenderer;
         fRenderer = NULL;
@@ -354,6 +357,9 @@ BGLView::BGLView(BRect rect, char* name, ulong resizingMode, ulong mode,
     fClipInfo(NULL),
     fRenderer(new Renderer{.view = this})
 {
+    // The frames cover the view (Draw() fills what they do not): app_server
+    // need not fill the background before each one.
+    SetViewColor(B_TRANSPARENT_COLOR);
     if (fRenderer->Init() < B_OK) {
         delete fRenderer;
         fRenderer = NULL;
@@ -463,7 +469,11 @@ BGLView::Draw(BRect updateRect)
     BRegion region(updateRect);
     if (fRenderer != NULL && fRenderer->fBitmap.IsSet()) {
         PthreadMutexLocker lock(&fRenderer->fLock);
-        DrawBitmap(fRenderer->fBitmap.Get(), B_ORIGIN);
+        // Asynchronous: app_server copies the frame at the end of the update
+        // (to the back and front buffers in one pass), not before Draw()
+        // returns. The bitmap is not written until the renderer has a newer
+        // frame on screen.
+        DrawBitmapAsync(fRenderer->fBitmap.Get(), B_ORIGIN);
         region.Exclude(fRenderer->fBitmap->Bounds());
     }
     FillRegion(&region, B_SOLID_LOW);
