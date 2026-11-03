@@ -33,6 +33,9 @@
 
 #include "BitmapHook.h"
 
+#include <Bitmap.h>
+#include <Window.h>
+
 // Haiku's <pthread.h> spells it with the _NP suffix.
 #if !defined(PTHREAD_RECURSIVE_MUTEX_INITIALIZER) \
 	&& defined(PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP)
@@ -60,6 +63,7 @@ struct glview_direct_info {
     REQUIRED(PFNEGLMAKECURRENTPROC, eglMakeCurrent) \
     REQUIRED(PFNEGLTERMINATEPROC, eglTerminate) \
     REQUIRED(PFNEGLSWAPBUFFERSPROC, eglSwapBuffers) \
+    REQUIRED(PFNEGLSWAPINTERVALPROC, eglSwapInterval) \
     REQUIRED(PFNEGLCREATEWINDOWSURFACEPROC, eglCreateWindowSurface) \
     REQUIRED(PFNEGLCREATEPBUFFERSURFACEPROC, eglCreatePbufferSurface) \
     REQUIRED(PFNEGLDESTROYSURFACEPROC, eglDestroySurface) \
@@ -116,11 +120,40 @@ struct BGLView::Renderer {
     } fBmpHook;
     pthread_mutex_t fLock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;
     ObjectDeleter<BBitmap> fBitmap;
+    // the frames are overlay bitmaps (scanned out by the display) since the
+    // first one was shown: the view is the overlay's key color
+    bool fOverlay = false;
+    int fSwapInterval = -1;
 
     ~Renderer();
     status_t Init();
-    void SwapBuffers();
+    void SwapBuffers(bool vSync);
+    BBitmap *ShowOverlay(BBitmap *bitmap);
 };
+
+// to the view: it shows ordinary bitmaps again (Renderer::fOverlay)
+static const uint32 kMsgLeaveOverlay = 'glOv';
+
+// how long the presenter waits for the window's lock to flip an overlay
+static const bigtime_t kOverlayLockTimeout = 50000;
+
+// the virtual table of the views' bitmap hooks (see
+// hgl_native_window_shows_overlays())
+static void* sBitmapHookTable = NULL;
+
+
+/*
+ * For the EGL driver, which looks it up by name (an older libGL has none):
+ * whether a native window shows overlay bitmaps on an overlay channel - a
+ * BGLView's does. The driver hands others no overlay bitmaps: they would draw
+ * them, reading the display's write-combining memory.
+ */
+extern "C" __attribute__((visibility("default"))) bool
+hgl_native_window_shows_overlays(const void *nativeWindow)
+{
+    return nativeWindow != NULL && sBitmapHookTable != NULL
+        && *(void* const*)nativeWindow == sBitmapHookTable;
+}
 
 
 BGLView::Display BGLView::sDisplay;
@@ -227,11 +260,23 @@ void BGLView::Renderer::BitmapHook::GetSize(uint32_t &width, uint32_t &height)
 
 BBitmap *BGLView::Renderer::BitmapHook::SetBitmap(BBitmap *bmp)
 {
+    if (bmp != NULL && (bmp->Flags() & B_BITMAP_WILL_OVERLAY) != 0)
+        return Base()->ShowOverlay(bmp);
+
     BBitmap* oldBmp;
+    bool leaveOverlay;
     {
         PthreadMutexLocker lock(&Base()->fLock);
         oldBmp = Base()->fBitmap.Detach();
         Base()->fBitmap.SetTo(bmp);
+        leaveOverlay = Base()->fOverlay;
+        Base()->fOverlay = false;
+    }
+    if (leaveOverlay) {
+        // the overlay goes and the view color is transparent again before
+        // the view draws this bitmap (messages arrive in order)
+        BMessage leave(kMsgLeaveOverlay);
+        BMessenger(Base()->view).SendMessage(&leave, (BHandler*)NULL, 0);
     }
     // Outside the lock, and without waiting: the presenter thread calls this for every frame. While the
     // window's thread is held up (its looper locked by the thread tearing it down) its port fills with
@@ -244,6 +289,8 @@ BBitmap *BGLView::Renderer::BitmapHook::SetBitmap(BBitmap *bmp)
 
 status_t BGLView::Renderer::Init()
 {
+    sBitmapHookTable = *(void**)&fBmpHook;
+
     display = &BGLView::sDisplay;
     if (display->InitCheck() < B_OK)
         return display->InitCheck();
@@ -317,9 +364,57 @@ BGLView::Renderer::~Renderer()
     }
 }
 
-void BGLView::Renderer::SwapBuffers()
+void BGLView::Renderer::SwapBuffers(bool vSync)
 {
+    // vSync: the frame waits for the display's vertical blank where it can
+    // (overlay frames; EGL's swap interval)
+    if (fSwapInterval != (vSync ? 1 : 0)) {
+        fSwapInterval = vSync ? 1 : 0;
+        display->eglSwapInterval(display->eglDpy, fSwapInterval);
+    }
     display->eglSwapBuffers(display->eglDpy, eglSurf);
+}
+
+/*
+ * Shows an overlay bitmap (the presenter thread calls this for each frame):
+ * the first one takes an overlay channel, the others are flipped onto it.
+ * The display shows the overlay where the view has the key color, which
+ * app_server fills as the view color. Returns the bitmap no longer shown,
+ * or the one given when it could not be shown: the window's thread holds
+ * its lock for too long (the presenter must never block on it, see
+ * SetBitmap()).
+ */
+BBitmap *BGLView::Renderer::ShowOverlay(BBitmap *bitmap)
+{
+    if (view->LockLooperWithTimeout(kOverlayLockTimeout) != B_OK)
+        return bitmap;
+
+    bool first;
+    {
+        PthreadMutexLocker lock(&fLock);
+        first = !fOverlay;
+    }
+    uint32 options = B_OVERLAY_FILTER_HORIZONTAL | B_OVERLAY_FILTER_VERTICAL;
+    if (!first)
+        options |= B_OVERLAY_TRANSFER_CHANNEL;
+    rgb_color key;
+    status_t status = view->SetViewOverlay(bitmap, bitmap->Bounds(), view->Bounds(), &key,
+        B_FOLLOW_ALL, options);
+    BBitmap *oldBitmap = bitmap;
+    if (status == B_OK) {
+        // under the window's lock: Draw() sees the overlay from now on
+        PthreadMutexLocker lock(&fLock);
+        fOverlay = true;
+        oldBitmap = fBitmap.Detach();
+        fBitmap.SetTo(bitmap);
+    }
+    if (status == B_OK && first) {
+        // (before app_server redraws the view for the overlay)
+        view->SetViewColor(key);
+        view->Window()->Flush();
+    }
+    view->UnlockLooper();
+    return oldBitmap;
 }
 
 // #pragma mark -
@@ -412,7 +507,7 @@ BGLView::SwapBuffers(bool vSync)
 {
     _LockDraw();
     if (fRenderer != NULL)
-        fRenderer->SwapBuffers();
+        fRenderer->SwapBuffers(vSync);
     _UnlockDraw();
 }
 
@@ -469,6 +564,10 @@ BGLView::Draw(BRect updateRect)
     BRegion region(updateRect);
     if (fRenderer != NULL && fRenderer->fBitmap.IsSet()) {
         PthreadMutexLocker lock(&fRenderer->fLock);
+        // an overlay: the display shows it where app_server filled the view
+        // with its key color
+        if (fRenderer->fOverlay)
+            return;
         // Asynchronous: app_server copies the frame at the end of the update
         // (to the back and front buffers in one pass), not before Draw()
         // returns. The bitmap is not written until the renderer has a newer
@@ -554,6 +653,18 @@ status_t BGLView::Archive(BMessage* data, bool deep) const {
 }
 
 void BGLView::MessageReceived(BMessage* msg) {
+    if (msg->what == kMsgLeaveOverlay) {
+        if (fRenderer != NULL) {
+            // (unless the frames went back to overlays meanwhile)
+            PthreadMutexLocker lock(&fRenderer->fLock);
+            if (fRenderer->fOverlay)
+                return;
+        }
+        ClearViewOverlay();
+        SetViewColor(B_TRANSPARENT_COLOR);
+        Invalidate();
+        return;
+    }
     BView::MessageReceived(msg);
 }
 
