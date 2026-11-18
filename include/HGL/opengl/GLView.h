@@ -28,6 +28,9 @@
 #define BGL_CONTEXT_ES		2048
 	// an OpenGL ES context (3.1, 3.0 or 2.0: the newest the driver has) instead
 	// of desktop OpenGL
+#define BGL_CONTEXT_CORE	4096
+	// a core-profile desktop OpenGL context (3.2 or later, else 3.1: the newest
+	// the driver has) instead of a compatibility one; BGL_CONTEXT_ES wins
 
 
 #ifdef __cplusplus

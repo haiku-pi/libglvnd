@@ -301,6 +301,7 @@ status_t BGLView::Renderer::Init()
     }
 
     const bool es = (view->fOptions & BGL_CONTEXT_ES) != 0;
+    const bool core = !es && (view->fOptions & BGL_CONTEXT_CORE) != 0;
     EGLBoolean result = display->eglBindAPI(es ? EGL_OPENGL_ES_API : EGL_OPENGL_API);
     if (result != EGL_TRUE) {
         fprintf(stderr, "[!] eglBindAPI failed\n");
@@ -320,6 +321,26 @@ status_t BGLView::Renderer::Init()
             };
             eglCtx = display->eglCreateContext(display->eglDpy, display->eglCfg,
                 shareCtx, attribs);
+        }
+    } else if (core) {
+        // A core-profile context of any version is the newest the driver has
+        // (Mesa); 3.1 has no profiles: a 3.1 context is core-only.
+        static const EGLint kCore32[] = {
+            EGL_CONTEXT_MAJOR_VERSION, 3,
+            EGL_CONTEXT_MINOR_VERSION, 2,
+            EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+            EGL_NONE
+        };
+        static const EGLint kCore31[] = {
+            EGL_CONTEXT_MAJOR_VERSION, 3,
+            EGL_CONTEXT_MINOR_VERSION, 1,
+            EGL_NONE
+        };
+        eglCtx = display->eglCreateContext(display->eglDpy, display->eglCfg, shareCtx,
+            kCore32);
+        if (eglCtx == EGL_NO_CONTEXT) {
+            eglCtx = display->eglCreateContext(display->eglDpy, display->eglCfg,
+                shareCtx, kCore31);
         }
     } else {
         eglCtx = display->eglCreateContext(display->eglDpy, display->eglCfg, shareCtx,
